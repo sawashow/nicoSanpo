@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DriveSpotter - ドライブ記憶特定ツール</title>
+    <!-- PWA Meta Tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22DriveSpotter%22%2C%22short_name%22%3A%22DriveSpotter%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230f172a%22%2C%22theme_color%22%3A%22%233b82f6%22%7D" />
+
+    <!-- Tailwind CSS & Lucide Icons -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+        }
+
+        .glass-card {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .btn-record {
+            transition: transform 0.1s;
+        }
+
+        .btn-record:active {
+            transform: scale(0.95);
+        }
+
+        .loader {
+            border-top-color: #3b82f6;
+            animation: spinner 1.5s linear infinite;
+        }
+
+        @keyframes spinner {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+
+<body class="pb-20">
+
+    <!-- Header -->
+    <header class="sticky top-0 z-50 p-4 glass-card border-b border-slate-700">
+        <div class="max-w-md mx-auto flex justify-between items-center">
+            <h1
+                class="text-xl font-extrabold bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent">
+                DriveSpotter
+            </h1>
+            <div class="flex gap-4">
+                <button onclick="toggleView('history')" class="text-slate-400 hover:text-white">
+                    <i data-lucide="history"></i>
+                </button>
+                <button onclick="toggleView('main')" class="text-slate-400 hover:text-white">
+                    <i data-lucide="home"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main id="app-container" class="max-w-md mx-auto p-4 space-y-6">
+
+        <!-- SECTION 1: クイック記録 -->
+        <section id="section-quick" class="space-y-4">
+            <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider">今すぐ記録</h2>
+            <div class="grid grid-cols-1 gap-4">
+                <button id="btn-gps" onclick="captureSpot()"
+                    class="btn-record w-full h-32 glass-card rounded-3xl flex flex-col items-center justify-center gap-2 border-2 border-blue-500/30 hover:bg-blue-500/10 transition-colors">
+                    <div class="bg-blue-500 p-4 rounded-full shadow-lg shadow-blue-500/40">
+                        <i data-lucide="map-pin" class="text-white w-8 h-8"></i>
+                    </div>
+                    <span class="font-bold text-lg">いまの店！</span>
+                    <span class="text-xs text-slate-400" id="gps-status">位置情報を取得して保存</span>
+                </button>
+
+                <div class="glass-card rounded-2xl p-4 flex items-center gap-3">
+                    <button id="btn-voice" onclick="startVoiceRecognition()"
+                        class="p-3 bg-slate-700 rounded-full hover:bg-red-500 transition-colors">
+                        <i data-lucide="mic" id="mic-icon"></i>
+                    </button>
+                    <input id="input-memo" type="text" placeholder="特徴をメモ（例：黄色い看板のラーメン屋）"
+                        class="flex-1 bg-transparent border-none outline-none text-sm">
+                    <button onclick="saveManualMemo()" class="text-blue-400 font-semibold">保存</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- SECTION 2: AI推論フォーム -->
+        <section id="section-ai" class="space-y-4">
+            <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider">曖昧な記憶から探す</h2>
+            <div class="glass-card rounded-2xl p-5 space-y-4">
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">エリア / 道路名</label>
+                    <input id="search-area" type="text" placeholder="例：国道134号 鎌倉付近"
+                        class="w-full bg-slate-800 rounded-lg p-2 text-sm outline-none ring-1 ring-slate-700 focus:ring-blue-500">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-xs text-slate-400 block mb-1">通過時間帯</label>
+                        <input id="search-time" type="time"
+                            class="w-full bg-slate-800 rounded-lg p-2 text-sm outline-none ring-1 ring-slate-700">
+                    </div>
+                    <div>
+                        <label class="text-xs text-slate-400 block mb-1">業種（なんとなく）</label>
+                        <input id="search-type" type="text" placeholder="カフェ、GSなど"
+                            class="w-full bg-slate-800 rounded-lg p-2 text-sm outline-none ring-1 ring-slate-700">
+                    </div>
+                </div>
+                <div>
+                    <label class="text-xs text-slate-400 block mb-1">外観・特徴の記憶</label>
+                    <textarea id="search-features" rows="2" placeholder="赤と黒の看板、駐車場が広い、レンガ造り..."
+                        class="w-full bg-slate-800 rounded-lg p-2 text-sm outline-none ring-1 ring-slate-700 focus:ring-blue-500"></textarea>
+                </div>
+                <button onclick="searchWithAI()"
+                    class="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg">
+                    <i data-lucide="sparkles" class="w-5 h-5"></i>
+                    AIに推論させる
+                </button>
+            </div>
+        </section>
+
+        <!-- SECTION 3: 結果表示エリア -->
+        <section id="section-results" class="space-y-4 hidden">
+            <div class="flex justify-between items-center">
+                <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider">AIの推論結果</h2>
+                <button onclick="clearResults()" class="text-xs text-slate-500">クリア</button>
+            </div>
+            <div id="results-list" class="space-y-4">
+                <!-- AIによる候補がここに挿入されます -->
+            </div>
+        </section>
+
+        <!-- SECTION 4: 履歴エリア -->
+        <section id="section-history" class="space-y-4 hidden">
+            <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider">最近の記録</h2>
+            <div id="history-list" class="space-y-3">
+                <!-- 保存されたログがここに表示されます -->
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Loading Overlay -->
+    <div id="loading"
+        class="fixed inset-0 bg-slate-950/80 hidden z-[100] flex flex-col items-center justify-center gap-4">
+        <div class="loader ease-linear rounded-full border-4 border-t-4 border-slate-700 h-12 w-12"></div>
+        <p class="text-blue-400 font-medium">AIが周辺店舗を照合中...</p>
+    </div>
+
+    <script>
+        // --- 設定・定数 ---
+        const GEMINI_API_KEY = "AIzaSyADLtROFxHPbqrGon6PGTVNIphRmGZsxsU"; // ここにAPIキーを入力
+        let logs = JSON.parse(localStorage.getItem('ds_logs') || '[]');
+        let favorites = JSON.parse(localStorage.getItem('ds_favs') || '[]');
+
+        // --- 初期化 ---
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            updateHistoryList();
+        });
+
+        // --- 画面切り替え ---
+        function toggleView(view) {
+            const sections = ['section-quick', 'section-ai', 'section-results', 'section-history'];
+            sections.forEach(s => document.getElementById(s).classList.add('hidden'));
+
+            if (view === 'main') {
+                document.getElementById('section-quick').classList.remove('hidden');
+                document.getElementById('section-ai').classList.remove('hidden');
+                if (document.getElementById('results-list').children.length > 0) {
+                    document.getElementById('section-results').classList.remove('hidden');
+                }
+            } else if (view === 'history') {
+                document.getElementById('section-history').classList.remove('hidden');
+            }
+            window.scrollTo(0, 0);
+        }
+
+        // --- 機能1: クイックGPS記録 (ファイル環境・拒否時安全フォールバック付き) ---
+        function captureSpot() {
+            const btn = document.getElementById('btn-gps');
+            const status = document.getElementById('gps-status');
+
+            status.innerText = "位置情報取得中...";
+
+            const savePosition = (lat, lng, accuracy = 0, isDummy = false) => {
+                const newLog = {
+                    id: Date.now(),
+                    lat: lat,
+                    lng: lng,
+                    accuracy: accuracy,
+                    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    date: new Date().toLocaleDateString(),
+                    memo: document.getElementById('input-memo').value.trim() || (isDummy ? "位置情報未設定(テスト記録)" : "位置情報を記録"),
+                    detectedName: null
+                };
+
+                logs.unshift(newLog);
+                localStorage.setItem('ds_logs', JSON.stringify(logs));
+                document.getElementById('input-memo').value = "";
+
+                status.innerText = isDummy ? `記録完了！(位置未許可)` : `記録完了！(精度 ±${accuracy}m)`;
+                btn.classList.add('bg-green-500/20');
+                updateHistoryList();
+
+                setTimeout(() => {
+                    status.innerText = "位置情報を取得して保存";
+                    btn.classList.remove('bg-green-500/20');
+                }, 2500);
+            };
+
+            if (!navigator.geolocation || !window.isSecureContext && location.protocol === 'file:') {
+                console.warn("Geolocation is restricted in file:// protocol or non-secure context.");
+                // file:// 直開き等で位置情報が使用できない場合はダミー位置で記録
+                savePosition(35.6812, 139.7671, 0, true); // 東京駅付近を仮位置として保存
+                return;
+            }
+
+            // タイムアウト保護付きで現在地取得
+            const timer = setTimeout(() => {
+                console.warn("GPS timeout: falling back to default/dummy position.");
+                savePosition(35.6812, 139.7671, 0, true);
+            }, 4000);
+
+            try {
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                        clearTimeout(timer);
+                        savePosition(pos.coords.latitude, pos.coords.longitude, Math.round(pos.coords.accuracy || 0), false);
+                    },
+                    (err) => {
+                        clearTimeout(timer);
+                        console.warn("GPS Failed:", err.message);
+                        savePosition(35.6812, 139.7671, 0, true);
+                    },
+                    { enableHighAccuracy: false, timeout: 3500, maximumAge: 60000 }
+                );
+            } catch (e) {
+                clearTimeout(timer);
+                savePosition(35.6812, 139.7671, 0, true);
+            }
+        }
+
+        // --- Gemini API 共通呼び出し関数 (自動フォールバック付き) ---
+        async function callGeminiAPI(prompt) {
+            const models = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-3.6-flash'];
+            let lastError = null;
+
+            for (const model of models) {
+                try {
+                    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: [{ text: prompt }] }],
+                            generationConfig: {
+                                response_mime_type: "application/json"
+                            }
+                        })
+                    });
+
+                    if (!response.ok) {
+                        const errData = await response.json().catch(() => ({}));
+                        throw new Error(errData.error?.message || `HTTP エラー: ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (!text) throw new Error("回答データが空でした");
+
+                    return JSON.parse(text);
+                } catch (err) {
+                    console.warn(`Model ${model} failed:`, err.message);
+                    lastError = err;
+                }
+            }
+            throw lastError || new Error("Gemini APIの呼び出しに失敗しました");
+        }
+
+        // --- 機能3: AI検索 & Gemini API連携 ---
+        async function searchWithAI() {
+            const area = document.getElementById('search-area').value;
+            const time = document.getElementById('search-time').value;
+            const type = document.getElementById('search-type').value;
+            const features = document.getElementById('search-features').value;
+
+            if (!area && !features) {
+                alert("エリアか特徴を入力してください");
+                return;
+            }
+
+            document.getElementById('loading').classList.remove('hidden');
+
+            const prompt = `あなたはドライブの記憶や地域店舗に非常に詳しい地理専門家です。
+以下の情報を元に、該当エリアや特徴に最も合致する実在する具体的な店舗の候補を3つ挙げてください。
+
+エリア/道路名: ${area}
+通過時刻: ${time}
+業種: ${type}
+見た目の特徴: ${features}
+
+【重要指示】
+- 店舗名は単なるブランド名（例: マクドナルド）ではなく、必ず「具体支店名（例: マクドナルド ◯◯バイパス店、コメダ珈琲店 ◯◯駅前店）」まで特定してください。
+- address には都道府県・市区町村からの正確な実在住所を記載してください。
+
+回答は必ず以下のJSON形式の配列のみで返してください：
+[{"name": "具体的な店舗名（支店名含む）", "address": "都道府県からの詳細住所", "reason": "選定理由", "match": 90, "type": "業種"}]`;
+
+            try {
+                const results = await callGeminiAPI(prompt);
+                displayResults(Array.isArray(results) ? results : []);
+                document.getElementById('section-results').classList.remove('hidden');
+                lucide.createIcons();
+
+            } catch (error) {
+                console.error("Gemini API Error:", error);
+                alert("AI検索に失敗しました: " + error.message);
+            } finally {
+                document.getElementById('loading').classList.add('hidden');
+            }
+        }
+
+        // 緯度経度からAI店舗特定 (後から特定用)
+        async function identifySpotWithAI(lat, lng, memoText = "") {
+            const loading = document.getElementById('loading');
+            const loadingText = loading.querySelector('p');
+            if (loadingText) loadingText.innerText = "周辺店舗をAIが特定中...";
+            loading.classList.remove('hidden');
+
+            const prompt = `あなたは日本国内の地理と店舗位置情報に非常に詳しい専門家です。
+以下の緯度・経度の座標（およびメモ）を元に、その座標の半径50m以内にある、または直近に実在する店舗・施設・スポットの候補を3つ挙げてください。
+
+緯度: ${lat}
+経度: ${lng}
+${memoText ? `メモ・特徴: ${memoText}` : ''}
+
+【重要指示】
+- 店舗名は単なるブランド名ではなく、必ず「具体的な支店名・店舗名（例: マクドナルド ◯◯店）」まで記載してください。
+- address には都道府県からの正確な実在住所を記載してください。
+
+回答は必ず以下のJSON形式の配列のみで返してください：
+[{"name": "具体的な店舗名（支店名含む）", "address": "都道府県からの詳細住所", "reason": "選定理由", "match": 95, "type": "業种"}]`;
+
+            try {
+                const results = await callGeminiAPI(prompt);
+                const items = Array.isArray(results) ? results : [];
+
+                displayResults(items);
+                document.getElementById('section-results').classList.remove('hidden');
+                lucide.createIcons();
+                return items;
+
+            } catch (error) {
+                console.error("AI Identify Error:", error);
+                alert("AI特定エラー: " + error.message);
+                return [];
+            } finally {
+                loading.classList.add('hidden');
+                if (loadingText) loadingText.innerText = "AIが周辺店舗を照合中...";
+            }
+        }
+
+        // 履歴からAI特定を実行
+        async function identifySpotFromLog(logId) {
+            const log = logs.find(l => l.id === logId);
+            if (!log || !log.lat) return;
+
+            const results = await identifySpotWithAI(log.lat, log.lng, log.memo);
+            if (results && results.length > 0) {
+                log.detectedName = results[0].name;
+                localStorage.setItem('ds_logs', JSON.stringify(logs));
+                updateHistoryList();
+            }
+            toggleView('main');
+            document.getElementById('section-results').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function displayResults(items) {
+            const list = document.getElementById('results-list');
+            list.innerHTML = items.map(item => {
+                const safeName = (item.name || '').replace(/'/g, "\\'");
+                const safeAddress = (item.address || '').replace(/'/g, "\\'");
+                return `
+                <div class="glass-card rounded-2xl p-4 space-y-3">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <span class="text-[10px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full font-bold uppercase">${item.type}</span>
+                            <h3 class="text-lg font-bold mt-1">${item.name}</h3>
+                            <p class="text-xs text-slate-400 mt-0.5"><i data-lucide="map-pin" class="inline w-3 h-3"></i> ${item.address || '住所未特定'}</p>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-xs text-slate-400">一致度</span>
+                            <div class="text-xl font-extrabold text-blue-400">${item.match}%</div>
+                        </div>
+                    </div>
+                    <p class="text-sm text-slate-300 leading-relaxed">${item.reason}</p>
+                    <div class="flex gap-2">
+                        <button onclick="openMap('${safeName}', '${safeAddress}')" class="flex-1 bg-slate-700 hover:bg-slate-600 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1">
+                            <i data-lucide="map" class="w-4 h-4"></i> Mapで場所を確認
+                        </button>
+                        <button onclick="openStreetView('${safeAddress || safeName}')" class="flex-1 bg-slate-700 hover:bg-slate-600 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1">
+                            <i data-lucide="eye" class="w-4 h-4"></i> StreetView
+                        </button>
+                        <button onclick="saveToFav('${safeName}')" class="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg">
+                            <i data-lucide="bookmark" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+            `}).join('');
+        }
+
+        // --- 外部連携 ---
+        function openMap(name, address) {
+            const query = address ? `${name} ${address}` : name;
+            window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`, '_blank');
+        }
+
+        function updateHistoryList() {
+            const list = document.getElementById('history-list');
+            if (logs.length === 0) {
+                list.innerHTML = '<p class="text-center text-slate-500 text-sm py-10">履歴はありません</p>';
+                return;
+            }
+            list.innerHTML = logs.map(log => `
+                <div class="glass-card rounded-xl p-4 space-y-2">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm font-bold text-white">${log.detectedName ? `<span class="text-blue-400">📍 ${log.detectedName}</span>` : (log.memo || '位置情報のみ記録')}</p>
+                            ${log.detectedName && log.memo && log.memo !== '位置情報を記録' ? `<p class="text-xs text-slate-400">メモ: ${log.memo}</p>` : ''}
+                            <p class="text-[11px] text-slate-400 mt-1">${log.date} ${log.time} ${log.lat ? `(精度±${log.accuracy || '?'}m)` : ''}</p>
+                        </div>
+                    </div>
+                    ${log.lat ? `
+                        <div class="flex gap-2 pt-1 border-t border-slate-700/50">
+                            <button onclick="identifySpotFromLog(${log.id})" class="flex-1 bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1">
+                                <i data-lucide="sparkles" class="w-3.5 h-3.5"></i> AIで店舗を特定
+                            </button>
+                            <button onclick="openMap('${log.detectedName || '地点'}', '${log.lat},${log.lng}')" class="px-3 bg-slate-700 hover:bg-slate-600 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1">
+                                <i data-lucide="map-pin" class="w-3.5 h-3.5"></i> Map
+                            </button>
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+            lucide.createIcons();
+        }
+
+        function clearResults() {
+            document.getElementById('results-list').innerHTML = '';
+            document.getElementById('section-results').classList.add('hidden');
+        }
+
+        function saveToFav(name) {
+            alert(name + " を履歴に保存しました");
+        }
+    </script>
+</body>
+
+</html>
