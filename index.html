@@ -72,16 +72,52 @@
                 class="text-xl font-extrabold bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent">
                 DriveSpotter
             </h1>
-            <div class="flex gap-4">
-                <button onclick="toggleView('history')" class="text-slate-400 hover:text-white">
+            <div class="flex gap-4 items-center">
+                <button onclick="openKeyModal()" class="text-slate-400 hover:text-white p-1" title="APIキー設定">
+                    <i data-lucide="settings"></i>
+                </button>
+                <button onclick="toggleView('history')" class="text-slate-400 hover:text-white p-1">
                     <i data-lucide="history"></i>
                 </button>
-                <button onclick="toggleView('main')" class="text-slate-400 hover:text-white">
+                <button onclick="toggleView('main')" class="text-slate-400 hover:text-white p-1">
                     <i data-lucide="home"></i>
                 </button>
             </div>
         </div>
     </header>
+
+    <!-- API Key 設定モーダル -->
+    <div id="modal-apikey" class="fixed inset-0 bg-slate-950/80 hidden z-[110] flex items-center justify-center p-4">
+        <div class="glass-card rounded-3xl p-6 max-w-sm w-full space-y-4 border border-blue-500/30">
+            <div class="flex justify-between items-center">
+                <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                    <i data-lucide="key" class="text-blue-400 w-5 h-5"></i> Gemini APIキー設定
+                </h3>
+                <button onclick="closeKeyModal()" class="text-slate-400 hover:text-white text-xl font-bold">&times;</button>
+            </div>
+            <p class="text-xs text-slate-300 leading-relaxed">
+                AI店舗特定機能を利用するには、個人のGemini APIキーが必要です。（無料で1分で取得可能です）
+            </p>
+            <div>
+                <label class="text-xs text-slate-400 block mb-1">API Key</label>
+                <input id="input-api-key" type="password" placeholder="AIzaSy..."
+                    class="w-full bg-slate-800 rounded-xl p-3 text-sm outline-none ring-1 ring-slate-700 focus:ring-blue-500 font-mono text-white">
+            </div>
+            <div class="flex gap-2 pt-2">
+                <button onclick="saveApiKey()" class="flex-1 bg-blue-600 hover:bg-blue-500 py-2.5 rounded-xl font-bold text-xs text-white shadow-lg">
+                    保存する
+                </button>
+                <button onclick="closeKeyModal()" class="px-4 bg-slate-700 hover:bg-slate-600 py-2.5 rounded-xl font-semibold text-xs text-slate-300">
+                    キャンセル
+                </button>
+            </div>
+            <div class="pt-2 border-t border-slate-700/60 text-center">
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-xs text-blue-400 hover:underline flex items-center justify-center gap-1">
+                    <i data-lucide="external-link" class="w-3.5 h-3.5"></i> 無料のAPIキーをGoogleで取得
+                </a>
+            </div>
+        </div>
+    </div>
 
     <main id="app-container" class="max-w-md mx-auto p-4 space-y-6">
 
@@ -346,14 +382,46 @@
             );
         }
 
-        // --- Gemini API 共通呼び出し関数 (自動フォールバック付き) ---
+        // --- APIキー設定モーダル制御 ---
+        function getApiKey() {
+            return localStorage.getItem('ds_gemini_key') || '';
+        }
+
+        function openKeyModal() {
+            document.getElementById('input-api-key').value = getApiKey();
+            document.getElementById('modal-apikey').classList.remove('hidden');
+            lucide.createIcons();
+        }
+
+        function closeKeyModal() {
+            document.getElementById('modal-apikey').classList.add('hidden');
+        }
+
+        function saveApiKey() {
+            const key = document.getElementById('input-api-key').value.trim();
+            if (!key) {
+                alert("APIキーを入力してください");
+                return;
+            }
+            localStorage.setItem('ds_gemini_key', key);
+            closeKeyModal();
+            alert("Gemini APIキーを保存しました！");
+        }
+
+        // --- Gemini API 共通呼び出し関数 (自動フォールバック＆キー管理付き) ---
         async function callGeminiAPI(prompt) {
+            const apiKey = getApiKey();
+            if (!apiKey) {
+                openKeyModal();
+                throw new Error("Gemini APIキーが設定されていません。画面の入力欄にキーを設定してください。");
+            }
+
             const models = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-3.6-flash'];
             let lastError = null;
 
             for (const model of models) {
                 try {
-                    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+                    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
                     const response = await fetch(url, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -367,7 +435,11 @@
 
                     if (!response.ok) {
                         const errData = await response.json().catch(() => ({}));
-                        throw new Error(errData.error?.message || `HTTP エラー: ${response.status}`);
+                        const errMsg = errData.error?.message || `HTTP エラー: ${response.status}`;
+                        if (errMsg.includes('leaked') || errMsg.includes('API key not valid') || response.status === 400 || response.status === 403) {
+                            openKeyModal();
+                        }
+                        throw new Error(errMsg);
                     }
 
                     const data = await response.json();
