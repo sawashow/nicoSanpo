@@ -10,9 +10,11 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22DriveSpotter%22%2C%22short_name%22%3A%22DriveSpotter%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230f172a%22%2C%22theme_color%22%3A%22%233b82f6%22%7D" />
 
-    <!-- Tailwind CSS & Lucide Icons -->
+    <!-- Tailwind CSS & Lucide Icons & Leaflet Map -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
@@ -40,6 +42,13 @@
         .loader {
             border-top-color: #3b82f6;
             animation: spinner 1.5s linear infinite;
+        }
+
+        #spot-map {
+            height: 180px;
+            width: 100%;
+            border-radius: 1rem;
+            z-index: 1;
         }
 
         @keyframes spinner {
@@ -88,6 +97,27 @@
                     <span class="font-bold text-lg">いまの店！</span>
                     <span class="text-xs text-slate-400" id="gps-status">位置情報を取得して保存</span>
                 </button>
+
+                <!-- 現在地リアルタイム確認カード & ミニマップ -->
+                <div id="spot-map-container" class="glass-card rounded-3xl p-4 space-y-3 hidden border border-blue-500/40">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-bold uppercase">📍 取得完了</span>
+                            <h3 id="current-place-title" class="text-base font-bold text-white mt-1">取得中...</h3>
+                            <p id="current-coords-text" class="text-[11px] text-slate-400"></p>
+                        </div>
+                    </div>
+                    <!-- Leaflet ミニマップ -->
+                    <div id="spot-map" class="shadow-inner border border-slate-700"></div>
+                    <div class="flex gap-2 pt-1">
+                        <button id="btn-open-gmaps" class="flex-1 bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-md">
+                            <i data-lucide="map" class="w-4 h-4"></i> Google Mapで開く
+                        </button>
+                        <button id="btn-open-streetview" class="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-200 py-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5">
+                            <i data-lucide="eye" class="w-4 h-4"></i> ストリートビュー
+                        </button>
+                    </div>
+                </div>
 
                 <div class="glass-card rounded-2xl p-4 flex items-center gap-3">
                     <button id="btn-voice" onclick="startVoiceRecognition()"
@@ -192,26 +222,33 @@
             window.scrollTo(0, 0);
         }
 
-        // 逆ジオコーディング (座標から地名を取得)
+        let leafletMap = null;
+        let leafletMarker = null;
+
+        // 逆ジオコーディング (詳細な町名・丁目・道路名まで取得)
         async function reverseGeocode(lat, lng) {
             try {
-                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=14&accept-language=ja`);
+                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&accept-language=ja`);
                 if (res.ok) {
                     const data = await res.json();
                     const addr = data.address || {};
                     const state = addr.province || addr.state || '';
-                    const city = addr.city || addr.town || addr.village || addr.suburb || '';
-                    if (state || city) {
-                        return `${state}${city}`.trim();
+                    const city = addr.city || addr.town || addr.county || addr.city_district || '';
+                    const suburb = addr.suburb || addr.neighbourhood || addr.quarter || addr.subdivision || addr.village || '';
+                    const road = addr.road || '';
+                    
+                    const fullAddress = `${state}${city}${suburb}${road}`.trim();
+                    if (fullAddress) {
+                        return fullAddress;
                     }
                 }
             } catch (e) {
                 console.warn("Reverse geocode failed:", e);
             }
-            return `緯度:${lat.toFixed(4)}, 経度:${lng.toFixed(4)}`;
+            return `位置情報 (緯度:${lat.toFixed(4)}, 経度:${lng.toFixed(4)})`;
         }
 
-        // --- 機能1: クイックGPS記録 (リアルGPS取得・地名表示対応) ---
+        // --- 機能1: クイックGPS記録 (リアルGPS＋詳細地名＋ミニマップ表示) ---
         function captureSpot() {
             const btn = document.getElementById('btn-gps');
             const status = document.getElementById('gps-status');
@@ -238,7 +275,7 @@
                     const lng = pos.coords.longitude;
                     const accuracy = Math.round(pos.coords.accuracy || 0);
 
-                    status.innerText = "地名を確認中...";
+                    status.innerText = "具体住所を確認中...";
                     const placeName = await reverseGeocode(lat, lng);
 
                     const newLog = {
@@ -257,14 +294,47 @@
                     localStorage.setItem('ds_logs', JSON.stringify(logs));
                     document.getElementById('input-memo').value = "";
 
-                    status.innerHTML = `<span class="text-green-400 font-bold">📍 ${placeName} で記録完了！</span><br><span class="text-[10px] text-slate-300">(緯度:${lat.toFixed(4)}, 経度:${lng.toFixed(4)} 精度±${accuracy}m)</span>`;
+                    // UIミニマップ＆住所表示の更新
+                    const mapContainer = document.getElementById('spot-map-container');
+                    mapContainer.classList.remove('hidden');
+                    document.getElementById('current-place-title').innerText = placeName;
+                    document.getElementById('current-coords-text').innerText = `緯度: ${lat.toFixed(6)}, 経度: ${lng.toFixed(6)} (精度 ±${accuracy}m)`;
+
+                    // Google Maps / StreetView ボタンのバインド
+                    document.getElementById('btn-open-gmaps').onclick = () => {
+                        window.open(`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`, '_blank');
+                    };
+                    document.getElementById('btn-open-streetview').onclick = () => {
+                        window.open(`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`, '_blank');
+                    };
+
+                    // Leaflet マップ表示・更新
+                    try {
+                        if (!leafletMap) {
+                            leafletMap = L.map('spot-map').setView([lat, lng], 16);
+                            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                                maxZoom: 19,
+                                attribution: '© OpenStreetMap'
+                            }).addTo(leafletMap);
+                            leafletMarker = L.marker([lat, lng]).addTo(leafletMap);
+                        } else {
+                            leafletMap.setView([lat, lng], 16);
+                            leafletMarker.setLatLng([lat, lng]);
+                        }
+                        setTimeout(() => leafletMap.invalidateSize(), 300);
+                    } catch (mErr) {
+                        console.warn("Leaflet map init error:", mErr);
+                    }
+
+                    status.innerHTML = `<span class="text-green-400 font-bold">📍 記録完了！</span>`;
                     btn.classList.remove('bg-blue-500/20');
                     btn.classList.add('bg-green-500/20');
                     updateHistoryList();
 
                     setTimeout(() => {
                         btn.classList.remove('bg-green-500/20');
-                    }, 4000);
+                        status.innerText = "位置情報を取得して保存";
+                    }, 3000);
                 },
                 (err) => {
                     console.error("GPS Error:", err);
