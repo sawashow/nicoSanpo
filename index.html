@@ -192,69 +192,88 @@
             window.scrollTo(0, 0);
         }
 
-        // --- 機能1: クイックGPS記録 (ファイル環境・拒否時安全フォールバック付き) ---
+        // 逆ジオコーディング (座標から地名を取得)
+        async function reverseGeocode(lat, lng) {
+            try {
+                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=14&accept-language=ja`);
+                if (res.ok) {
+                    const data = await res.json();
+                    const addr = data.address || {};
+                    const state = addr.province || addr.state || '';
+                    const city = addr.city || addr.town || addr.village || addr.suburb || '';
+                    if (state || city) {
+                        return `${state}${city}`.trim();
+                    }
+                }
+            } catch (e) {
+                console.warn("Reverse geocode failed:", e);
+            }
+            return `緯度:${lat.toFixed(4)}, 経度:${lng.toFixed(4)}`;
+        }
+
+        // --- 機能1: クイックGPS記録 (リアルGPS取得・地名表示対応) ---
         function captureSpot() {
             const btn = document.getElementById('btn-gps');
             const status = document.getElementById('gps-status');
 
-            status.innerText = "位置情報取得中...";
+            status.innerText = "位置情報を取得中...";
+            btn.classList.add('bg-blue-500/20');
 
-            const savePosition = (lat, lng, accuracy = 0, isDummy = false) => {
-                const newLog = {
-                    id: Date.now(),
-                    lat: lat,
-                    lng: lng,
-                    accuracy: accuracy,
-                    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    date: new Date().toLocaleDateString(),
-                    memo: document.getElementById('input-memo').value.trim() || (isDummy ? "位置情報未設定(テスト記録)" : "位置情報を記録"),
-                    detectedName: null
-                };
-
-                logs.unshift(newLog);
-                localStorage.setItem('ds_logs', JSON.stringify(logs));
-                document.getElementById('input-memo').value = "";
-
-                status.innerText = isDummy ? `記録完了！(位置未許可)` : `記録完了！(精度 ±${accuracy}m)`;
-                btn.classList.add('bg-green-500/20');
-                updateHistoryList();
-
-                setTimeout(() => {
-                    status.innerText = "位置情報を取得して保存";
-                    btn.classList.remove('bg-green-500/20');
-                }, 2500);
-            };
-
-            if (!navigator.geolocation || !window.isSecureContext && location.protocol === 'file:') {
-                console.warn("Geolocation is restricted in file:// protocol or non-secure context.");
-                // file:// 直開き等で位置情報が使用できない場合はダミー位置で記録
-                savePosition(35.6812, 139.7671, 0, true); // 東京駅付近を仮位置として保存
+            if (!navigator.geolocation) {
+                alert("お使いのブラウザは位置情報(GPS)に対応していません");
+                status.innerText = "位置情報を取得して保存";
+                btn.classList.remove('bg-blue-500/20');
                 return;
             }
 
-            // タイムアウト保護付きで現在地取得
-            const timer = setTimeout(() => {
-                console.warn("GPS timeout: falling back to default/dummy position.");
-                savePosition(35.6812, 139.7671, 0, true);
-            }, 4000);
+            const geoOptions = {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0
+            };
 
-            try {
-                navigator.geolocation.getCurrentPosition(
-                    (pos) => {
-                        clearTimeout(timer);
-                        savePosition(pos.coords.latitude, pos.coords.longitude, Math.round(pos.coords.accuracy || 0), false);
-                    },
-                    (err) => {
-                        clearTimeout(timer);
-                        console.warn("GPS Failed:", err.message);
-                        savePosition(35.6812, 139.7671, 0, true);
-                    },
-                    { enableHighAccuracy: false, timeout: 3500, maximumAge: 60000 }
-                );
-            } catch (e) {
-                clearTimeout(timer);
-                savePosition(35.6812, 139.7671, 0, true);
-            }
+            navigator.geolocation.getCurrentPosition(
+                async (pos) => {
+                    const lat = pos.coords.latitude;
+                    const lng = pos.coords.longitude;
+                    const accuracy = Math.round(pos.coords.accuracy || 0);
+
+                    status.innerText = "地名を確認中...";
+                    const placeName = await reverseGeocode(lat, lng);
+
+                    const newLog = {
+                        id: Date.now(),
+                        lat: lat,
+                        lng: lng,
+                        accuracy: accuracy,
+                        placeName: placeName,
+                        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        date: new Date().toLocaleDateString(),
+                        memo: document.getElementById('input-memo').value.trim() || "位置情報を記録",
+                        detectedName: null
+                    };
+
+                    logs.unshift(newLog);
+                    localStorage.setItem('ds_logs', JSON.stringify(logs));
+                    document.getElementById('input-memo').value = "";
+
+                    status.innerHTML = `<span class="text-green-400 font-bold">📍 ${placeName} で記録完了！</span><br><span class="text-[10px] text-slate-300">(緯度:${lat.toFixed(4)}, 経度:${lng.toFixed(4)} 精度±${accuracy}m)</span>`;
+                    btn.classList.remove('bg-blue-500/20');
+                    btn.classList.add('bg-green-500/20');
+                    updateHistoryList();
+
+                    setTimeout(() => {
+                        btn.classList.remove('bg-green-500/20');
+                    }, 4000);
+                },
+                (err) => {
+                    console.error("GPS Error:", err);
+                    btn.classList.remove('bg-blue-500/20');
+                    status.innerText = "取得失敗: 位置情報の使用を許可してください";
+                    alert("位置情報を取得できませんでした。ブラウザの位置情報許可が「オン」になっているかご確認ください。");
+                },
+                geoOptions
+            );
         }
 
         // --- Gemini API 共通呼び出し関数 (自動フォールバック付き) ---
@@ -442,17 +461,18 @@ ${memoText ? `メモ・特徴: ${memoText}` : ''}
                 <div class="glass-card rounded-xl p-4 space-y-2">
                     <div class="flex items-center justify-between">
                         <div>
-                            <p class="text-sm font-bold text-white">${log.detectedName ? `<span class="text-blue-400">📍 ${log.detectedName}</span>` : (log.memo || '位置情報のみ記録')}</p>
+                            <p class="text-xs text-blue-400 font-bold">📍 ${log.placeName || '位置情報地点'}</p>
+                            <p class="text-sm font-bold text-white mt-0.5">${log.detectedName ? `<span class="text-emerald-400">店舗: ${log.detectedName}</span>` : (log.memo || '位置情報のみ記録')}</p>
                             ${log.detectedName && log.memo && log.memo !== '位置情報を記録' ? `<p class="text-xs text-slate-400">メモ: ${log.memo}</p>` : ''}
-                            <p class="text-[11px] text-slate-400 mt-1">${log.date} ${log.time} ${log.lat ? `(精度±${log.accuracy || '?'}m)` : ''}</p>
+                            <p class="text-[10px] text-slate-400 mt-1">${log.date} ${log.time} ${log.lat ? `(緯度:${log.lat.toFixed(4)}, 経度:${log.lng.toFixed(4)} 精度±${log.accuracy || '?'}m)` : ''}</p>
                         </div>
                     </div>
                     ${log.lat ? `
-                        <div class="flex gap-2 pt-1 border-t border-slate-700/50">
+                        <div class="flex gap-2 pt-2 border-t border-slate-700/50">
                             <button onclick="identifySpotFromLog(${log.id})" class="flex-1 bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1">
                                 <i data-lucide="sparkles" class="w-3.5 h-3.5"></i> AIで店舗を特定
                             </button>
-                            <button onclick="openMap('${log.detectedName || '地点'}', '${log.lat},${log.lng}')" class="px-3 bg-slate-700 hover:bg-slate-600 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1">
+                            <button onclick="openMap('${log.detectedName || log.placeName || '地点'}', '${log.lat},${log.lng}')" class="px-3 bg-slate-700 hover:bg-slate-600 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1">
                                 <i data-lucide="map-pin" class="w-3.5 h-3.5"></i> Map
                             </button>
                         </div>
